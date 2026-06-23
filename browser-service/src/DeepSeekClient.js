@@ -21,22 +21,14 @@ class DeepSeekClient {
 
   async isLoggedIn() {
     try {
-      // روش اول: وجود textarea مخصوص چت
-      await this.page.waitForSelector('textarea, input[placeholder*="Message"]', { timeout: 3000 });
+      // بررسی وجود جعبه متن چت (سلکتورهای محتمل)
+      await this.page.waitForSelector('textarea[placeholder*="Message"], input[placeholder*="Message"], [contenteditable="true"]', { timeout: 5000 });
       return true;
     } catch {
       try {
-        // روش دوم: عدم وجود دکمه لاگین
-        const loginBtn = await this.page.$('text=Log in, text=Sign in, text=ورود, button[type="button"]:has-text("Log in")');
-        if (!loginBtn) {
-          // اگر دکمه لاگین وجود نداشته باشد، احتمالاً لاگین هستیم
-          return true;
-        }
-        // روش سوم: بررسی URL
-        if (this.page.url().includes('/chat')) {
-          return true;
-        }
-        return false;
+        const loginBtn = await this.page.$('button:has-text("Log in"), button:has-text("Sign in"), button:has-text("ورود")');
+        if (loginBtn) return false;
+        return this.page.url().includes('/chat');
       } catch {
         return false;
       }
@@ -51,18 +43,15 @@ class DeepSeekClient {
       return true;
     }
 
-    // اگر کوکی وجود ندارد یا لاگین نیست، تلاش برای لاگین خودکار
     if (email && password) {
       try {
         await this.performLogin(email, password);
         return true;
       } catch (error) {
         logger.error('Automatic login failed', { error: error.message });
-        // در صورت شکست، به حالت دستی می‌رویم
       }
     }
 
-    // در غیر این صورت، منتظر لاگین دستی کاربر
     logger.warn('Not logged in and automatic login failed/unavailable. Waiting for manual login...');
     await this.waitForManualLogin();
     return true;
@@ -71,10 +60,10 @@ class DeepSeekClient {
   async waitForManualLogin() {
     await this.page.waitForFunction(
       () => {
-        const input = document.querySelector('textarea, input[placeholder*="Message"]');
+        const input = document.querySelector('textarea[placeholder*="Message"], input[placeholder*="Message"], [contenteditable="true"]');
         return input !== null;
       },
-      { timeout: 120000 } // 2 دقیقه
+      { timeout: 120000 }
     );
     await this.browserManager.saveCookies();
     logger.info('Manual login detected, cookies saved');
@@ -82,39 +71,22 @@ class DeepSeekClient {
 
   async performLogin(email, password) {
     try {
-      // یافتن دکمه لاگین با روش‌های مختلف
-      const loginBtn = await this.page.getByRole('button', { name: /log in/i })
-        .or(this.page.getByText('Log in'))
-        .or(this.page.getByText('Sign in'))
-        .or(this.page.getByText('ورود'))
-        .first();
+      const loginBtn = await this.page.locator('button:has-text("Log in"), button:has-text("Sign in"), button:has-text("ورود")').first();
       await loginBtn.click();
 
-      // فیلد ایمیل
       const emailInput = await this.page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email"]', { timeout: 10000 });
       await emailInput.fill(email);
-      
-      // دکمه ادامه (بعد از ایمیل)
-      const continueBtn = await this.page.getByRole('button', { name: /continue|next|submit/i })
-        .or(this.page.getByText('Continue'))
-        .or(this.page.getByText('Next'))
-        .first();
+
+      const continueBtn = await this.page.locator('button:has-text("Continue"), button:has-text("Next"), button:has-text("ادامه")').first();
       await continueBtn.click();
 
-      // فیلد پسورد
       const passInput = await this.page.waitForSelector('input[type="password"], input[name="password"], input[placeholder*="password"]', { timeout: 10000 });
       await passInput.fill(password);
-      
-      // دکمه نهایی ورود
-      const finalBtn = await this.page.getByRole('button', { name: /sign in|log in|submit|ورود/i })
-        .or(this.page.getByText('Log in'))
-        .or(this.page.getByText('Sign in'))
-        .or(this.page.getByText('ورود'))
-        .first();
+
+      const finalBtn = await this.page.locator('button:has-text("Log in"), button:has-text("Sign in"), button:has-text("ورود")').first();
       await finalBtn.click();
 
-      // منتظر ورود به صفحه چت
-      await this.page.waitForSelector('textarea, input[placeholder*="Message"]', { timeout: 30000 });
+      await this.page.waitForSelector('textarea[placeholder*="Message"], input[placeholder*="Message"], [contenteditable="true"]', { timeout: 30000 });
       await this.browserManager.saveCookies();
       logger.info('Login successful');
     } catch (error) {
@@ -131,11 +103,12 @@ class DeepSeekClient {
         throw new Error('Not logged in');
       }
 
-      const input = await this.page.waitForSelector('textarea, input[placeholder*="Message"]', { timeout: 15000 });
+      const input = await this.page.waitForSelector('textarea[placeholder*="Message"], input[placeholder*="Message"], [contenteditable="true"]', { timeout: 15000 });
       await input.fill(message);
       await this.page.keyboard.press('Enter');
-      
+
       logger.debug('Message sent', { message });
+
       await this.waitForResponse();
       const response = await this.extractResponse();
       return response;
@@ -146,21 +119,41 @@ class DeepSeekClient {
   }
 
   async waitForResponse() {
-    await this.page.waitForSelector('.ds-markdown, .message-content, [class*="message"]:not([class*="user"])', { timeout: 60000 });
+    // سلکتورهای پاسخ (اولویت با data-testid)
+    const responseSelector = '[data-testid="assistant-message"], .ds-markdown, .prose, [class*="message"][class*="assistant"]';
+    
+    // منتظر ظاهر شدن حداقل یک المان پاسخ با محتوای غیرخالی
+    await this.page.waitForSelector(responseSelector, { timeout: 60000, state: 'visible' });
+    
+    // منتظر بمانیم تا محتوای آخرین المان پاسخ کامل شود (حداقل ۱۰ کاراکتر)
+    // ترتیب صحیح: (predicate, arg, options)
     await this.page.waitForFunction(
-      () => {
-        const el = document.querySelector('.ds-markdown, .message-content, [class*="message"]:not([class*="user"])');
-        return el && el.textContent.length > 0;
+      (selector) => {
+        const elements = document.querySelectorAll(selector);
+        if (elements.length === 0) return false;
+        const last = elements[elements.length - 1];
+        // اطمینان از وجود متن و نبودن placeholder یا پیام کوتاه
+        const text = last.textContent.trim();
+        return text.length > 10;
       },
+      responseSelector,  // این آرگومان به عنوان 'arg' به predicate ارسال می‌شود
       { timeout: 60000 }
     );
+    
+    logger.debug('Response received and complete');
   }
 
   async extractResponse() {
-    const selector = '.ds-markdown, .message-content, [class*="message"]:not([class*="user"])';
-    const element = await this.page.$(selector);
-    if (!element) throw new Error('Response element not found');
-    const text = await element.textContent();
+    const responseSelector = '[data-testid="assistant-message"], .ds-markdown, .prose, [class*="message"][class*="assistant"]';
+    
+    // دریافت تمام المان‌های پاسخ و انتخاب آخرین آنها
+    const elements = await this.page.$$(responseSelector);
+    if (elements.length === 0) {
+      throw new Error('No response element found');
+    }
+    
+    const lastElement = elements[elements.length - 1];
+    const text = await lastElement.textContent();
     return text.trim();
   }
 }
