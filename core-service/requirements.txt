@@ -1,2 +1,3 @@
-# Python dependencies
-# e.g., fastapi, uvicorn, playwright
+Flask
+requests
+python-dotenv

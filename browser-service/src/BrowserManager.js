@@ -1,1 +1,72 @@
-// BrowserManager.js
+const { chromium } = require('playwright');
+const fs = require('fs').promises;
+const path = require('path');
+const logger = require('./logger');
+const config = require('./config');
+
+class BrowserManager {
+  constructor() {
+    this.browser = null;
+    this.context = null;
+    this.page = null;
+  }
+
+  async launch() {
+    try {
+      this.browser = await chromium.launch({
+        headless: config.headless,
+        channel: 'msedge',
+        args: ['--disable-blink-features=AutomationControlled']
+      });
+      this.context = await this.browser.newContext({
+        viewport: { width: 1280, height: 720 },
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
+      });
+      await this.loadCookies();
+      this.page = await this.context.newPage();
+      logger.info('Browser launched successfully');
+      return this.page;
+    } catch (error) {
+      logger.error('Failed to launch browser', { error: error.message });
+      throw error;
+    }
+  }
+
+  async loadCookies() {
+    try {
+      const cookieFile = path.resolve(config.cookiePath);
+      const data = await fs.readFile(cookieFile, 'utf8');
+      const cookies = JSON.parse(data);
+      if (cookies.length) {
+        await this.context.addCookies(cookies);
+        logger.info('Cookies loaded', { count: cookies.length });
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        logger.warn('Could not load cookies', { error: error.message });
+      }
+    }
+  }
+
+    async saveCookies() {
+    try {
+        if (!this.context) return;
+        const cookies = await this.context.cookies();
+        const cookieFile = path.resolve(config.cookiePath);
+        await fs.mkdir(path.dirname(cookieFile), { recursive: true });
+        await fs.writeFile(cookieFile, JSON.stringify(cookies, null, 2));
+        logger.info('Cookies saved', { count: cookies.length });
+    } catch (error) {
+        logger.error('Failed to save cookies', { error: error.message });
+    }
+    }
+
+  async close() {
+    if (this.browser) {
+      await this.browser.close();
+      logger.info('Browser closed');
+    }
+  }
+}
+
+module.exports = BrowserManager;
