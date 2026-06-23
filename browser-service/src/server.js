@@ -16,14 +16,17 @@ async function initBrowser() {
   browserManager = new BrowserManager();
   const page = await browserManager.launch();
   deepSeekClient = new DeepSeekClient(page, browserManager);
+  
   const email = process.env.DEEPSEEK_EMAIL;
   const password = process.env.DEEPSEEK_PASSWORD;
-  if (email && password) {
+  
+  try {
     await deepSeekClient.ensureLoggedIn(email, password);
-  } else {
-    await deepSeekClient.ensureLoggedIn();
+    logger.info('Browser service ready');
+  } catch (error) {
+    logger.error('Initialization failed', { error: error.message });
+    // در صورت خطا، سرویس همچنان اجرا می‌شود و منتظر لاگین دستی می‌ماند
   }
-  logger.info('Browser service ready');
 }
 
 app.post('/send-message', async (req, res) => {
@@ -39,6 +42,9 @@ app.post('/send-message', async (req, res) => {
     res.json({ success: true, response });
   } catch (error) {
     logger.error('Request failed', { error: error.message });
+    if (error.message.includes('Not logged in')) {
+      return res.status(401).json({ error: 'Not logged in. Please login manually.' });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -60,8 +66,5 @@ process.on('SIGTERM', shutdown);
 const port = config.port;
 app.listen(port, async () => {
   logger.info(`Browser service listening on port ${port}`);
-  await initBrowser().catch(err => {
-    logger.error('Initialization failed', { error: err.message });
-    process.exit(1);
-  });
+  await initBrowser();
 });

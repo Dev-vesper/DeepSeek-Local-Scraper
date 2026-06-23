@@ -21,10 +21,25 @@ class DeepSeekClient {
 
   async isLoggedIn() {
     try {
-      await this.page.waitForSelector('textarea, input[placeholder*="Message"]', { timeout: 5000 });
+      // روش اول: وجود textarea مخصوص چت
+      await this.page.waitForSelector('textarea, input[placeholder*="Message"]', { timeout: 3000 });
       return true;
     } catch {
-      return false;
+      try {
+        // روش دوم: عدم وجود دکمه لاگین
+        const loginBtn = await this.page.$('text=Log in, text=Sign in, text=ورود, button[type="button"]:has-text("Log in")');
+        if (!loginBtn) {
+          // اگر دکمه لاگین وجود نداشته باشد، احتمالاً لاگین هستیم
+          return true;
+        }
+        // روش سوم: بررسی URL
+        if (this.page.url().includes('/chat')) {
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -36,26 +51,30 @@ class DeepSeekClient {
       return true;
     }
 
-    // اگر کوکی وجود ندارد یا منقضی شده، لاگین می‌کنیم
+    // اگر کوکی وجود ندارد یا لاگین نیست، تلاش برای لاگین خودکار
     if (email && password) {
-      await this.performLogin(email, password);
-      return true;
+      try {
+        await this.performLogin(email, password);
+        return true;
+      } catch (error) {
+        logger.error('Automatic login failed', { error: error.message });
+        // در صورت شکست، به حالت دستی می‌رویم
+      }
     }
 
-    // در غیر این صورت، منتظر لاگین دستی کاربر می‌مانیم
-    logger.warn('Not logged in and no credentials. Waiting for manual login...');
+    // در غیر این صورت، منتظر لاگین دستی کاربر
+    logger.warn('Not logged in and automatic login failed/unavailable. Waiting for manual login...');
     await this.waitForManualLogin();
     return true;
   }
 
   async waitForManualLogin() {
-    // تا زمانی که کاربر لاگین کند، منتظر می‌مانیم
     await this.page.waitForFunction(
       () => {
         const input = document.querySelector('textarea, input[placeholder*="Message"]');
         return input !== null;
       },
-      { timeout: 120000 } // 2 دقیقه زمان برای لاگین دستی
+      { timeout: 120000 } // 2 دقیقه
     );
     await this.browserManager.saveCookies();
     logger.info('Manual login detected, cookies saved');
@@ -63,21 +82,37 @@ class DeepSeekClient {
 
   async performLogin(email, password) {
     try {
-      // کلیک روی دکمه ورود
-      await this.page.click('a:has-text("Log in"), button:has-text("Log in")');
-      await this.page.waitForSelector('input[type="email"], input[name="email"]', { timeout: 10000 });
-      
-      // پر کردن ایمیل
-      const emailInput = await this.page.$('input[type="email"], input[name="email"]');
+      // یافتن دکمه لاگین با روش‌های مختلف
+      const loginBtn = await this.page.getByRole('button', { name: /log in/i })
+        .or(this.page.getByText('Log in'))
+        .or(this.page.getByText('Sign in'))
+        .or(this.page.getByText('ورود'))
+        .first();
+      await loginBtn.click();
+
+      // فیلد ایمیل
+      const emailInput = await this.page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email"]', { timeout: 10000 });
       await emailInput.fill(email);
-      await this.page.click('button[type="submit"]');
       
-      // منتظر فیلد پسورد
-      await this.page.waitForSelector('input[type="password"], input[name="password"]', { timeout: 10000 });
-      const passInput = await this.page.$('input[type="password"], input[name="password"]');
+      // دکمه ادامه (بعد از ایمیل)
+      const continueBtn = await this.page.getByRole('button', { name: /continue|next|submit/i })
+        .or(this.page.getByText('Continue'))
+        .or(this.page.getByText('Next'))
+        .first();
+      await continueBtn.click();
+
+      // فیلد پسورد
+      const passInput = await this.page.waitForSelector('input[type="password"], input[name="password"], input[placeholder*="password"]', { timeout: 10000 });
       await passInput.fill(password);
-      await this.page.click('button[type="submit"]');
       
+      // دکمه نهایی ورود
+      const finalBtn = await this.page.getByRole('button', { name: /sign in|log in|submit|ورود/i })
+        .or(this.page.getByText('Log in'))
+        .or(this.page.getByText('Sign in'))
+        .or(this.page.getByText('ورود'))
+        .first();
+      await finalBtn.click();
+
       // منتظر ورود به صفحه چت
       await this.page.waitForSelector('textarea, input[placeholder*="Message"]', { timeout: 30000 });
       await this.browserManager.saveCookies();
@@ -92,7 +127,6 @@ class DeepSeekClient {
     try {
       await this.page.goto(this.baseUrl, { waitUntil: 'networkidle' });
       
-      // اطمینان از لاگین بودن
       if (!await this.isLoggedIn()) {
         throw new Error('Not logged in');
       }
