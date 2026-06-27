@@ -17,8 +17,8 @@ async function initBrowser() {
   const page = await browserManager.launch();
   deepSeekClient = new DeepSeekClient(page, browserManager);
   
-  const email = process.env.DEEPSEEK_EMAIL;
-  const password = process.env.DEEPSEEK_PASSWORD;
+  const email = config.deepseekEmail || process.env.DEEPSEEK_EMAIL;
+  const password = config.deepseekPassword || process.env.DEEPSEEK_PASSWORD;
   
   try {
     await deepSeekClient.ensureLoggedIn(email, password);

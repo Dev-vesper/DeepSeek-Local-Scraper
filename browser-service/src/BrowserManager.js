@@ -32,9 +32,10 @@ class BrowserManager {
     }
   }
 
-  async loadCookies() {
+  async loadCookies(cookieFilePath = null) {
     try {
-      const cookieFile = path.resolve(config.cookiePath);
+      const targetPath = cookieFilePath || process.env.COOKIE_PATH || config.cookiePath;
+      const cookieFile = path.resolve(targetPath);
       const data = await fs.readFile(cookieFile, 'utf8');
       const cookies = JSON.parse(data);
       if (cookies.length) {
@@ -48,18 +49,19 @@ class BrowserManager {
     }
   }
 
-    async saveCookies() {
+  async saveCookies(cookieFilePath = null) {
     try {
-        if (!this.context) return;
-        const cookies = await this.context.cookies();
-        const cookieFile = path.resolve(config.cookiePath);
-        await fs.mkdir(path.dirname(cookieFile), { recursive: true });
-        await fs.writeFile(cookieFile, JSON.stringify(cookies, null, 2));
-        logger.info('Cookies saved', { count: cookies.length });
+      if (!this.context) return;
+      const cookies = await this.context.cookies();
+      const targetPath = cookieFilePath || process.env.COOKIE_PATH || config.cookiePath;
+      const cookieFile = path.resolve(targetPath);
+      await fs.mkdir(path.dirname(cookieFile), { recursive: true });
+      await fs.writeFile(cookieFile, JSON.stringify(cookies, null, 2));
+      logger.info('Cookies saved', { count: cookies.length });
     } catch (error) {
-        logger.error('Failed to save cookies', { error: error.message });
+      logger.error('Failed to save cookies', { error: error.message });
     }
-    }
+  }
 
   async close() {
     if (this.browser) {
