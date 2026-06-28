@@ -187,4 +187,26 @@ describe('DeepSeekClient', () => {
 
     expect(element.value).toBe('سلام');
   });
+
+  test('extractResponse converts HTML elements to Markdown', async () => {
+    const element1 = {
+      innerHTML: jest.fn().mockResolvedValue('<p>First message</p>'),
+    };
+    const element2 = {
+      innerHTML: jest.fn().mockResolvedValue('<pre><code>code block</code></pre>'),
+    };
+    const page = {
+      $$: jest.fn().mockResolvedValue([element1, element2]),
+    };
+    const browserManager = {
+      saveCookies: jest.fn(),
+    };
+    const client = new DeepSeekClient(page, browserManager);
+    const response = await client.extractResponse(0);
+
+    expect(element1.innerHTML).toHaveBeenCalled();
+    expect(element2.innerHTML).toHaveBeenCalled();
+    expect(response).toContain('First message');
+    expect(response).toContain('code block');
+  });
 });

@@ -24,8 +24,8 @@ async function initBrowser() {
     await deepSeekClient.ensureLoggedIn(email, password);
     logger.info('Browser service ready');
   } catch (error) {
+    // اینجا حتی به کرش یا ارور هم خوردی ادامه میده
     logger.error('Initialization failed', { error: error.message });
-    // در صورت خطا، سرویس همچنان اجرا می‌شود و منتظر لاگین دستی می‌ماند
   }
 }
 

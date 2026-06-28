@@ -1,11 +1,13 @@
 const logger = require('./logger');
 const config = require('./config');
+const MarkdownConverter = require('./MarkdownConverter');
 
 class DeepSeekClient {
   constructor(page, browserManager) {
     this.page = page;
     this.browserManager = browserManager;
     this.baseUrl = config.deepseekUrl;
+    this.markdownConverter = new MarkdownConverter();
     this.setupAutoCookieSave();
   }
 
@@ -507,13 +509,16 @@ class DeepSeekClient {
     }
 
     const newElements = elements.slice(Math.max(previousCount, 0));
-    const textValues = await Promise.all(newElements.map((element) => element.textContent()));
-    const responseText = textValues
-      .map((value) => (value || '').trim())
-      .filter((value) => value.length > 0)
-      .join('\n\n');
+    const htmlParts = await Promise.all(
+      newElements.map((element) => element.innerHTML().catch(() => ''))
+    );
+    const markdownParts = htmlParts
+      .filter((html) => html.length > 0)
+      .map((html) => this.markdownConverter.convert(html))
+      .filter((md) => md.trim().length > 0);
 
-    return responseText;
+    const responseMarkdown = markdownParts.join('\n\n');
+    return responseMarkdown;
   }
 }
 
