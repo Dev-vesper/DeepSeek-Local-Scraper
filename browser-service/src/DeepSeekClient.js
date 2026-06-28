@@ -28,7 +28,7 @@ class DeepSeekClient {
   }
 
   getChatInputSelector() {
-    return 'textarea[placeholder*="Message"], input[placeholder*="Message"], [contenteditable="true"], [role="textbox"], [aria-label*="message" i], [data-testid*="message" i], .ProseMirror';
+    return 'textarea[placeholder*="Message"], textarea, input[placeholder*="Message"], [contenteditable="true"], [role="textbox"], [aria-label*="message" i], [data-testid*="message" i], .ProseMirror';
   }
 
   async isSignInPage() {
@@ -50,6 +50,25 @@ class DeepSeekClient {
     }
 
     return false;
+  }
+
+  async navigateTo(url, options = {}) {
+    const timeout = options.timeout || 45000;
+    const waitUntil = options.waitUntil || 'domcontentloaded';
+
+    try {
+      await this.page.goto(url, { waitUntil, timeout });
+      return;
+    } catch (error) {
+      logger.warn('Primary navigation failed, retrying with load event', { url, message: error.message });
+      try {
+        await this.page.goto(url, { waitUntil: 'load', timeout });
+        return;
+      } catch (innerError) {
+        logger.error('Navigation failed after retry', { url, message: innerError.message });
+        throw innerError;
+      }
+    }
   }
 
   async findInput() {
@@ -118,11 +137,47 @@ class DeepSeekClient {
     return null;
   }
 
-  async ensureLoggedIn(email, password) {
-    const resolvedEmail = email || process.env.DEEPSEEK_EMAIL || config.deepseekEmail;
-    const resolvedPassword = password || process.env.DEEPSEEK_PASSWORD || config.deepseekPassword;
+  getResponseSelector() {
+    return '.ds-assistant-message-main-content, .ds-markdown.ds-assistant-message-main-content, [data-testid="assistant-message"], .prose, [class*="message"][class*="assistant"]';
+  }
 
-    await this.page.goto(this.baseUrl, { waitUntil: 'networkidle' });
+  async countResponseElements() {
+    const responseSelector = this.getResponseSelector();
+
+    if (this.page.locator) {
+      try {
+        return await this.page.locator(responseSelector).count();
+      } catch {
+        // fall through
+      }
+    }
+
+    if (typeof this.page.$$eval === 'function') {
+      try {
+        return await this.page.$$eval(responseSelector, (elements) => elements.length);
+      } catch {
+        // fall through
+      }
+    }
+
+    if (typeof this.page.$$ === 'function') {
+      try {
+        const elements = await this.page.$$(responseSelector);
+        return elements.length;
+      } catch {
+        // fall through
+      }
+    }
+
+    return 0;
+  }
+
+  async ensureLoggedIn(email, password) {
+    const resolvedEmail = email !== undefined ? email : (process.env.DEEPSEEK_EMAIL || config.deepseekEmail || '');
+    const resolvedPassword = password !== undefined ? password : (process.env.DEEPSEEK_PASSWORD || config.deepseekPassword || '');
+    const autoLoginEnabled = (email !== undefined || password !== undefined) ? true : (config.autoLoginEnabled !== false);
+
+    await this.navigateTo(this.baseUrl);
 
     if (await this.isLoggedIn()) {
       logger.info('Already logged in');
@@ -130,7 +185,7 @@ class DeepSeekClient {
       return true;
     }
 
-    if (config.autoLoginEnabled && resolvedEmail && resolvedPassword) {
+    if (autoLoginEnabled && resolvedEmail && resolvedPassword) {
       try {
         await this.performLogin(resolvedEmail, resolvedPassword);
         return true;
@@ -139,7 +194,7 @@ class DeepSeekClient {
       }
     }
 
-    if (!config.autoLoginEnabled) {
+    if (!autoLoginEnabled) {
       logger.warn('Automatic login is disabled by configuration. Waiting for manual login...');
     } else {
       logger.warn('Not logged in and automatic login failed or credentials are missing. Waiting for manual login...');
@@ -168,12 +223,106 @@ class DeepSeekClient {
     logger.info('Manual login detected, cookies saved');
   }
 
+  async waitForFieldValue(locator, expectedValue, timeoutMs = 2000) {
+    const expected = String(expectedValue ?? '');
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const currentValue = await locator.evaluate((element) => {
+        if (!element) return '';
+        if (element.isContentEditable || element.getAttribute?.('contenteditable')) {
+          return (element.textContent || '').trim();
+        }
+        if ('value' in element) {
+          return (element.value || '').trim();
+        }
+        return '';
+      }).catch(() => '');
+
+      if (currentValue === expected) {
+        return true;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    return false;
+  }
+
+  isPageClosedError(error) {
+    const message = error && error.message ? String(error.message) : '';
+    return message.includes('Target page, context or browser has been closed') || message.includes('Page closed');
+  }
+
+  async setFieldValue(locator, value) {
+    const normalizedValue = String(value ?? '');
+
+    await locator.click().catch(() => undefined);
+    await locator.focus?.().catch(() => undefined);
+
+    if (typeof locator.fill === 'function') {
+      try {
+        await locator.fill(normalizedValue);
+        logger.debug('Field value set via fill', { value: normalizedValue });
+      } catch (error) {
+        logger.warn('Fill failed; trying pressSequentially', { error: error.message });
+      }
+    }
+
+    if (typeof locator.evaluate === 'function') {
+      try {
+        await locator.evaluate((element, text) => {
+          const normalizedText = String(text ?? '');
+          if ('value' in element && (element.tagName === 'TEXTAREA' || element.tagName === 'INPUT')) {
+            element.focus();
+            element.value = normalizedText;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return { method: 'valueProperty', success: true };
+          }
+
+          if (element.isContentEditable || element.getAttribute?.('contenteditable')) {
+            element.focus();
+            element.textContent = normalizedText;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return { method: 'contenteditable', success: true };
+          }
+
+          return { method: 'unknown', success: false };
+        }, normalizedValue);
+        logger.debug('Field value set via evaluate fallback', { value: normalizedValue });
+        return;
+      } catch (error) {
+        logger.warn('Evaluate fallback failed', { error: error.message });
+      }
+    }
+
+    if (typeof locator.pressSequentially === 'function') {
+      try {
+        await locator.pressSequentially(normalizedValue, { delay: 20 });
+        logger.debug('Field value set via pressSequentially', { value: normalizedValue });
+        return;
+      } catch (error) {
+        logger.warn('pressSequentially failed; trying keyboard input', { error: error.message });
+      }
+    }
+
+    try {
+      await this.page.keyboard.type(normalizedValue, { delay: 20 });
+      logger.debug('Field value set via keyboard input', { value: normalizedValue });
+    } catch (error) {
+      logger.warn('Keyboard input failed', { error: error.message });
+      throw error;
+    }
+  }
+
   async fillInput(selector, value) {
     if (this.page.locator) {
       const field = this.page.locator(selector).first();
       const count = await field.count().catch(() => 0);
       if (count > 0) {
-        await field.fill(value);
+        await this.setFieldValue(field, value);
         return;
       }
     }
@@ -193,7 +342,7 @@ class DeepSeekClient {
 
   async performLogin(email, password) {
     try {
-      await this.page.goto(`${this.baseUrl}/sign_in`, { waitUntil: 'networkidle' });
+      await this.navigateTo(`${this.baseUrl}/sign_in`);
 
       if (await this.isSignInPage()) {
         await this.fillInput('input[placeholder*="Phone number / email" i], input[type="email"], input[name="email"], input[placeholder*="email" i]', email);
@@ -224,75 +373,147 @@ class DeepSeekClient {
     }
   }
 
+  async getSendButton() {
+    const selectors = [
+      'button[type="submit"]',
+      'button:has-text("Send")',
+      'button:has-text("send")',
+      'button[aria-label*="send" i]',
+      '[data-testid*="send" i]',
+      'div[role="button"][aria-label*="send" i]:not(.ds-button--disabled)',
+      'div[role="button"][data-testid*="send" i]:not(.ds-button--disabled)',
+      'div[role="button"].ds-button--primary:not(.ds-button--disabled)',
+      'div[role="button"][class*="ds-button--primary"]:not(.ds-button--disabled)',
+      'div[role="button"].ds-button--filled:not(.ds-button--disabled)'
+    ];
+
+    for (const selector of selectors) {
+      try {
+        const locator = this.page.locator(selector).first();
+        const count = await locator.count().catch(() => 0);
+        if (count > 0 && await locator.isVisible().catch(() => false)) {
+          return locator;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
   async sendMessage(message) {
-    try {
-      await this.page.goto(this.baseUrl, { waitUntil: 'networkidle' });
+    if (!this.browserManager) {
+      throw new Error('Browser manager is not initialized');
+    }
 
-      if (!await this.isLoggedIn()) {
-        await this.ensureLoggedIn();
-      }
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        this.page = await this.browserManager.getPage();
+        logger.debug('Preparing to send message', { attempt, pageClosed: this.page.isClosed?.() });
 
-      const input = await this.waitForInput({ timeout: 15000 });
-      if (!input) {
-        throw new Error('Chat input not found');
-      }
-      await input.fill(message);
-      await this.page.keyboard.press('Enter');
+        const initialResponseCount = await this.countResponseElements();
+        const currentUrl = this.page?.url?.() || '';
+        const shouldRefreshPage = !currentUrl.includes('/chat') && !currentUrl.includes('/sign_in') && !currentUrl.includes('/sign-in');
 
-      logger.debug('Message sent', { message });
+        if (shouldRefreshPage) {
+          await this.navigateTo(this.baseUrl);
+        }
 
-      await this.waitForResponse();
-      const response = await this.extractResponse();
-      return response;
-    } catch (error) {
-      const messageText = error.message || String(error);
-      if (messageText.includes('blocked') || messageText.includes('ERR_BLOCKED') || messageText.includes('could not be satisfied') || messageText.includes('ERR_NAME_NOT_RESOLVED')) {
-        const blockedError = new Error('DeepSeek page is currently unavailable');
-        logger.error('Send message failed because the DeepSeek page was blocked', { error: messageText });
-        throw blockedError;
-      }
-      logger.error('Send message failed', { error: messageText });
+        if (!await this.isLoggedIn()) {
+          await this.ensureLoggedIn();
+        }
+
+        const input = await this.waitForInput({ timeout: 15000 });
+        if (!input) {
+          throw new Error('Chat input not found');
+        }
+        await this.setFieldValue(input, message);
+        if (typeof this.page.waitForTimeout === 'function') {
+          await this.page.waitForTimeout(400);
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+
+        const sendButton = await this.getSendButton();
+        if (sendButton) {
+          await sendButton.click();
+        } else {
+          await input.press?.('Enter') || await this.page.keyboard.press('Enter');
+        }
+
+        logger.debug('Message sent', { message });
+
+        await this.waitForResponse(initialResponseCount);
+        const response = await this.extractResponse(initialResponseCount);
+        return response;
+      } catch (error) {
+        if (this.isPageClosedError(error) && attempt < maxAttempts) {
+          logger.warn('Page closed during send attempt, recreating browser/page and retrying', { attempt, error: error.message });
+          this.page = null;
+          continue;
+        }
+
+        const messageText = error.message || String(error);
+        if (messageText.includes('blocked') || messageText.includes('ERR_BLOCKED') || messageText.includes('could not be satisfied') || messageText.includes('ERR_NAME_NOT_RESOLVED')) {
+          const blockedError = new Error('DeepSeek page is currently unavailable');
+          logger.error('Send message failed because the DeepSeek page was blocked', { error: messageText });
+          throw blockedError;
+        }
+        logger.error('Send message failed', { error: messageText });
       throw error;
     }
   }
 
-  async waitForResponse() {
-    // سلکتورهای پاسخ (اولویت با data-testid)
-    const responseSelector = '[data-testid="assistant-message"], .ds-markdown, .prose, [class*="message"][class*="assistant"]';
-    
-    // منتظر ظاهر شدن حداقل یک المان پاسخ با محتوای غیرخالی
-    await this.page.waitForSelector(responseSelector, { timeout: 60000, state: 'visible' });
-    
-    // منتظر بمانیم تا محتوای آخرین المان پاسخ کامل شود (حداقل ۱۰ کاراکتر)
-    // ترتیب صحیح: (predicate, arg, options)
-    await this.page.waitForFunction(
-      (selector) => {
-        const elements = document.querySelectorAll(selector);
-        if (elements.length === 0) return false;
-        const last = elements[elements.length - 1];
-        // اطمینان از وجود متن و نبودن placeholder یا پیام کوتاه
-        const text = last.textContent.trim();
-        return text.length > 10;
-      },
-      responseSelector,  // این آرگومان به عنوان 'arg' به predicate ارسال می‌شود
-      { timeout: 60000 }
-    );
-    
-    logger.debug('Response received and complete');
   }
 
-  async extractResponse() {
-    const responseSelector = '[data-testid="assistant-message"], .ds-markdown, .prose, [class*="message"][class*="assistant"]';
-    
-    // دریافت تمام المان‌های پاسخ و انتخاب آخرین آنها
+  async waitForResponse(previousCount = 0) {
+    const responseSelector = this.getResponseSelector();
+    const deadline = Date.now() + 60000;
+    let lastSnapshot = '';
+    let stableTicks = 0;
+
+    while (Date.now() < deadline) {
+      const elements = await this.page.$$(responseSelector);
+      if (elements.length > previousCount) {
+        const latestElement = elements[elements.length - 1];
+        const text = (await latestElement.textContent().catch(() => '') || '').trim();
+        if (text.length > 10) {
+          if (text === lastSnapshot) {
+            stableTicks += 1;
+            if (stableTicks >= 2) {
+              logger.debug('Response received and complete');
+              return;
+            }
+          } else {
+            lastSnapshot = text;
+            stableTicks = 0;
+          }
+        }
+      }
+
+      await this.page.waitForTimeout(500);
+    }
+
+    logger.debug('Response wait timed out');
+  }
+
+  async extractResponse(previousCount = 0) {
+    const responseSelector = this.getResponseSelector();
     const elements = await this.page.$$(responseSelector);
-    if (elements.length === 0) {
+    if (elements.length <= previousCount) {
       throw new Error('No response element found');
     }
-    
-    const lastElement = elements[elements.length - 1];
-    const text = await lastElement.textContent();
-    return text.trim();
+
+    const newElements = elements.slice(Math.max(previousCount, 0));
+    const textValues = await Promise.all(newElements.map((element) => element.textContent()));
+    const responseText = textValues
+      .map((value) => (value || '').trim())
+      .filter((value) => value.length > 0)
+      .join('\n\n');
+
+    return responseText;
   }
 }
 

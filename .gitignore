@@ -6,3 +6,4 @@ cookies.json
 all_py_files.txt
 test.py
 test_py.py
+.pytest_cache/

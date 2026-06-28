@@ -13,6 +13,7 @@ class BrowserManager {
 
   async launch() {
     try {
+      await this.close();
       this.browser = await chromium.launch({
         headless: config.headless,
         channel: 'msedge',
@@ -24,6 +25,10 @@ class BrowserManager {
       });
       await this.loadCookies();
       this.page = await this.context.newPage();
+      this.page.on('close', () => {
+        logger.warn('Browser page closed, will recreate on next request');
+        this.page = null;
+      });
       logger.info('Browser launched successfully');
       return this.page;
     } catch (error) {
@@ -64,10 +69,41 @@ class BrowserManager {
   }
 
   async close() {
-    if (this.browser) {
-      await this.browser.close();
-      logger.info('Browser closed');
+    try {
+      if (this.browser) {
+        await this.browser.close();
+        logger.info('Browser closed');
+      }
+    } catch (error) {
+      logger.warn('Error while closing browser', { error: error.message });
+    } finally {
+      this.browser = null;
+      this.context = null;
+      this.page = null;
     }
+  }
+
+  async isReady() {
+    if (!this.browser || !this.context) {
+      return false;
+    }
+    if (!this.page) {
+      return false;
+    }
+    if (typeof this.page.isClosed === 'function' && this.page.isClosed()) {
+      return false;
+    }
+    if (typeof this.browser.isConnected === 'function' && !this.browser.isConnected()) {
+      return false;
+    }
+    return true;
+  }
+
+  async getPage() {
+    if (await this.isReady()) {
+      return this.page;
+    }
+    return this.launch();
   }
 }
 

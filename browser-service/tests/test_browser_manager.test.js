@@ -25,7 +25,7 @@ describe('BrowserManager', () => {
     const context = {
       addCookies: jest.fn().mockResolvedValue(undefined),
       cookies: jest.fn().mockResolvedValue([]),
-      newPage: jest.fn().mockResolvedValue({}),
+      newPage: jest.fn().mockResolvedValue({ on: jest.fn() }),
     };
     browser.newContext.mockResolvedValue(context);
     chromium.launch.mockResolvedValue(browser);

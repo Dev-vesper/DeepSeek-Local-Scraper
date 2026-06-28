@@ -21,6 +21,10 @@ def chat():
         logger.error(f"Unhandled exception: {e}")
         return jsonify({'error': 'Internal server error'}), 500
 
+@app.route('/send-message', methods=['POST'])
+def send_message():
+    return chat()
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'healthy'})
