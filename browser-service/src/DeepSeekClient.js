@@ -8,25 +8,6 @@ class DeepSeekClient {
     this.browserManager = browserManager;
     this.baseUrl = config.deepseekUrl;
     this.markdownConverter = new MarkdownConverter();
-    this.setupAutoCookieSave();
-  }
-
-  setupAutoCookieSave() {
-    if (!this.page || typeof this.page.on !== 'function') {
-      return;
-    }
-
-    this.page.on('framenavigated', async () => {
-      try {
-        const url = this.page.url();
-        if (url.includes('/chat')) {
-          await this.browserManager.saveCookies();
-          logger.debug('Cookies saved after navigation to chat');
-        }
-      } catch (error) {
-        logger.warn('Cookie persistence failed', { error: error.message });
-      }
-    });
   }
 
   getChatInputSelector() {
@@ -150,7 +131,6 @@ class DeepSeekClient {
       try {
         return await this.page.locator(responseSelector).count();
       } catch {
-        // fall through
       }
     }
 
@@ -158,7 +138,6 @@ class DeepSeekClient {
       try {
         return await this.page.$$eval(responseSelector, (elements) => elements.length);
       } catch {
-        // fall through
       }
     }
 
@@ -167,7 +146,6 @@ class DeepSeekClient {
         const elements = await this.page.$$(responseSelector);
         return elements.length;
       } catch {
-        // fall through
       }
     }
 
@@ -183,7 +161,6 @@ class DeepSeekClient {
 
     if (await this.isLoggedIn()) {
       logger.info('Already logged in');
-      await this.browserManager.saveCookies();
       return true;
     }
 
@@ -221,8 +198,7 @@ class DeepSeekClient {
       },
       { timeout: 120000 }
     );
-    await this.browserManager.saveCookies();
-    logger.info('Manual login detected, cookies saved');
+    logger.info('Manual login detected');
   }
 
   async waitForFieldValue(locator, expectedValue, timeoutMs = 2000) {
@@ -367,7 +343,6 @@ class DeepSeekClient {
         }
         throw new Error('Chat input not found after login');
       }
-      await this.browserManager.saveCookies();
       logger.info('Login successful');
     } catch (error) {
       logger.error('Login failed', { error: error.message });

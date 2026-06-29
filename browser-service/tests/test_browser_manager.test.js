@@ -1,55 +1,68 @@
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+const { chromium } = require('playwright');
+const BrowserManager = require('../src/BrowserManager');
 
 jest.mock('playwright', () => ({
   chromium: {
-    launch: jest.fn(),
+    launchPersistentContext: jest.fn(),
   },
 }));
-
-const { chromium } = require('playwright');
-const BrowserManager = require('../src/BrowserManager');
 
 describe('BrowserManager', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  test('launches a browser and loads cookies when present', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-manager-'));
-    const cookiePath = path.join(tempDir, 'cookies.json');
-    fs.writeFileSync(cookiePath, JSON.stringify([{ name: 'token', value: 'abc' }]))
-
-    const browser = { newContext: jest.fn(), close: jest.fn() };
-    const context = {
-      addCookies: jest.fn().mockResolvedValue(undefined),
-      cookies: jest.fn().mockResolvedValue([]),
-      newPage: jest.fn().mockResolvedValue({ on: jest.fn() }),
+  test('launches a persistent browser context and returns a page', async () => {
+    const fakePage = { on: jest.fn() };
+    const fakeContext = {
+      pages: jest.fn().mockReturnValue([]),
+      newPage: jest.fn().mockResolvedValue(fakePage),
+      close: jest.fn(),
     };
-    browser.newContext.mockResolvedValue(context);
-    chromium.launch.mockResolvedValue(browser);
+    chromium.launchPersistentContext.mockResolvedValue(fakeContext);
 
-    process.env.COOKIE_PATH = cookiePath;
     const manager = new BrowserManager();
-    await manager.launch();
+    const page = await manager.launch();
 
-    expect(chromium.launch).toHaveBeenCalled();
-    expect(context.addCookies).toHaveBeenCalledWith([{ name: 'token', value: 'abc' }]);
+    expect(chromium.launchPersistentContext).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headless: expect.any(Boolean),
+        channel: 'msedge',
+      })
+    );
+    expect(fakeContext.newPage).toHaveBeenCalled();
+    expect(page).toBe(fakePage);
   });
 
-  test('saves cookies to disk', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-manager-'));
-    const cookiePath = path.join(tempDir, 'cookies.json');
+  test('uses existing page from context if already open', async () => {
+    const existingPage = { on: jest.fn() };
+    const fakeContext = {
+      pages: jest.fn().mockReturnValue([existingPage]),
+      newPage: jest.fn(),
+      close: jest.fn(),
+    };
+    chromium.launchPersistentContext.mockResolvedValue(fakeContext);
 
     const manager = new BrowserManager();
-    manager.context = {
-      cookies: jest.fn().mockResolvedValue([{ name: 'token', value: 'abc' }]),
+    const page = await manager.launch();
+
+    expect(fakeContext.newPage).not.toHaveBeenCalled();
+    expect(page).toBe(existingPage);
+  });
+
+  test('close tears down context', async () => {
+    const fakeContext = {
+      close: jest.fn().mockResolvedValue(),
     };
+    chromium.launchPersistentContext.mockResolvedValue(fakeContext);
 
-    await manager.saveCookies(cookiePath);
+    const manager = new BrowserManager();
+    await manager.launch();
+    await manager.close();
 
-    const saved = JSON.parse(fs.readFileSync(cookiePath, 'utf8'));
-    expect(saved).toHaveLength(1);
+    expect(fakeContext.close).toHaveBeenCalled();
+    expect(manager.context).toBeNull();
+    expect(manager.page).toBeNull();
   });
 });

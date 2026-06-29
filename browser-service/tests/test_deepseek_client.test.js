@@ -1,5 +1,13 @@
 const DeepSeekClient = require('../src/DeepSeekClient');
 
+jest.mock('../src/MarkdownConverter', () => {
+  return jest.fn().mockImplementation(() => {
+    return {
+      convert: jest.fn((html) => html.replace(/<[^>]*>/g, ''))
+    };
+  });
+});
+
 describe('DeepSeekClient', () => {
   test('uses configured credentials when none are passed', async () => {
     const page = {
@@ -193,7 +201,7 @@ describe('DeepSeekClient', () => {
       innerHTML: jest.fn().mockResolvedValue('<p>First message</p>'),
     };
     const element2 = {
-      innerHTML: jest.fn().mockResolvedValue('<pre><code>code block</code></pre>'),
+      innerHTML: jest.fn().mockResolvedValue('<div class="md-code-block"><pre><code>code block</code></pre></div>'),
     };
     const page = {
       $$: jest.fn().mockResolvedValue([element1, element2]),

@@ -16,17 +16,7 @@ async function initBrowser() {
   browserManager = new BrowserManager();
   const page = await browserManager.launch();
   deepSeekClient = new DeepSeekClient(page, browserManager);
-  
-  const email = config.deepseekEmail || process.env.DEEPSEEK_EMAIL;
-  const password = config.deepseekPassword || process.env.DEEPSEEK_PASSWORD;
-  
-  try {
-    await deepSeekClient.ensureLoggedIn(email, password);
-    logger.info('Browser service ready');
-  } catch (error) {
-    // اینجا حتی به کرش یا ارور هم خوردی ادامه میده
-    logger.error('Initialization failed', { error: error.message });
-  }
+  logger.info('Browser service ready with persistent session');
 }
 
 app.post('/send-message', async (req, res) => {
