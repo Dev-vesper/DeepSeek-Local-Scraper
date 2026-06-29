@@ -15,42 +15,32 @@ class MarkdownConverter {
   }
 
   normalizeCodeBlocks(html) {
-    const $ = cheerio.load(html, null, false);
+    const $ = cheerio.load(html);
 
-    const codeContainers = $('div[class*="code"], div[class*="highlight"], pre, code').toArray();
+    const codeBlocks = $('div.md-code-block').toArray();
 
-    for (const el of codeContainers) {
-      const element = $(el);
+    for (const el of codeBlocks) {
+      const container = $(el);
 
-      if (element.parents('pre, div[class*="code"], div[class*="highlight"]').length > 0) {
-        continue;
-      }
+      const languageSpan = container.find('span.d813de27').first();
+      const language = languageSpan.length > 0 ? languageSpan.text().trim() : '';
 
-      const language = this.extractLanguage(element.attr('class') || '');
+      const preElement = container.find('pre').first();
+      if (preElement.length === 0) continue;
 
-      element.find('button, [role="button"], span:contains("Copy"), span:contains("Download"), .copy-button, .download-button').remove();
-
-      const codeText = element.text().trim();
+      const codeText = preElement.text().trim();
       if (!codeText) continue;
 
-      const pre = $('<pre></pre>');
-      const code = $('<code></code>').text(codeText);
+      const newPre = $('<pre></pre>');
+      const newCode = $('<code></code>').text(codeText);
       if (language) {
-        code.addClass(`language-${language}`);
+        newCode.addClass(`language-${language}`);
       }
-      pre.append(code);
-      element.replaceWith(pre);
+      newPre.append(newCode);
+      container.replaceWith(newPre);
     }
 
     return $.html();
-  }
-
-  extractLanguage(classAttr) {
-    const match = classAttr.match(/language-(\w+)/);
-    if (match) return match[1];
-    const match2 = classAttr.match(/lang(?:uage)?-(\w+)/i);
-    if (match2) return match2[1];
-    return '';
   }
 }
 
